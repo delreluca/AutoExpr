@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -34,7 +33,7 @@ namespace AutoExpr
                 {
                     xValues[i] = 0.1; // mu
                     xValues[nPaths + i] = 0.5; // sigma
-                    xValues[2*nPaths + i] = 0.0; // x0
+                    xValues[2 * nPaths + i] = 0.0; // x0
                 }
 
                 for (int i = nPaths * 3; i < nVariables * nPaths; i += 2)
@@ -65,7 +64,7 @@ namespace AutoExpr
 
                 var final = new Exp(node);
 
-                var state = final.Visit(new Visitor(), new CodeGenerator(valueMem, variables, gradientMem, (ulong)nPaths, LlvmBindings.BuildFunctions));
+                var state = final.Visit(new ForwardAdVisitor(), new CodeGenerator(valueMem, variables, gradientMem, (ulong)nPaths, LlvmBindings.BuildFunctions));
 
                 var executor = new LlvmExecutor(state);
                 executor.Run(env.FunctionPointers);

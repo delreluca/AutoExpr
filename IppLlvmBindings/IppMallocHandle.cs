@@ -5,6 +5,7 @@ using LLVMSharp;
 
 namespace AutoExpr.IppLlvmBindings
 {
+    ///<summary>Provides a pointer to allocated memory and disposes of it.</summary>
     public class IppMallocHandle : IDisposable
     {
         private CodeGenerator Generator { get; }
