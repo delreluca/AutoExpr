@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Runtime.InteropServices;
+using AutoExpr.Ipp;
 
 namespace AutoExpr
 {
@@ -10,14 +11,14 @@ namespace AutoExpr
     {
         static void Main(string[] args)
         {
-            using (var env = NativeLibEnv.LoadIpp())
+            using (var env = DynamicLibraries.LoadIpp())
             {
                 Console.WriteLine("IPP available");
 
                 Console.Write("How many paths? [e.g. 10000]: ");
-                var nPaths = int.Parse(Console.ReadLine(), CultureInfo.InvariantCulture);
+                var nPaths = 1000;//int.Parse(Console.ReadLine(), CultureInfo.InvariantCulture);
                 Console.WriteLine("Add to end result: ");
-                var s = double.Parse(Console.ReadLine(), CultureInfo.InvariantCulture);
+                var s = 0.0;//double.Parse(Console.ReadLine(), CultureInfo.InvariantCulture);
 
                 var node = new Mul(new[] { (Expr)new Const(2.0), new Var("x") });
                 var node2 = new Add(new[] { (Expr)new Const(1.0), node });
@@ -42,9 +43,10 @@ namespace AutoExpr
 
                 Marshal.Copy(xValues, 0, xM, nPaths);
 
-                var state = node4.Visit(new LlvmVisitor(), new LlvmState(vM, gM, variables, (ulong)nPaths));
+                var state = node4.Visit(new Visitor(), new CodeGenerator(vM, variables, gM, (ulong)nPaths, LlvmBindings.BuildFunctions));
 
-                state.Run(env);
+                var executor = new LlvmExecutor(state);
+                executor.Run(env.FunctionPointers);
 
                 Console.WriteLine("Back in main, fetching result.");
                 var result = new double[nPaths];
@@ -53,7 +55,7 @@ namespace AutoExpr
                 Marshal.Copy(gM, gradResult, 0, nPaths);
 
 
-                Console.WriteLine("MGF(1) = {0}, expected 8.68 (plus whatever added)", result.Average());
+                Console.WriteLine("MGF(1) = {0}, expected 8.68", result.Average());
                 Console.WriteLine("dMGF(1) = {0}, expected 17.36", gradResult.Average());
 
                 Marshal.FreeHGlobal(vM);

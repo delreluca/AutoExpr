@@ -4,15 +4,15 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 
-namespace AutoExpr
+namespace AutoExpr.Ipp
 {
-    public class NativeLibEnv : IDisposable
+    public class DynamicLibraries : IDisposable
     {
         private IntPtr[] libPtrs;
 
         private IReadOnlyDictionary<string, IntPtr> funPtrs;
 
-        public NativeLibEnv(IntPtr[] libPtrs, IReadOnlyDictionary<string, IntPtr> funPtrs)
+        public DynamicLibraries(IntPtr[] libPtrs, IReadOnlyDictionary<string, IntPtr> funPtrs)
         {
             this.libPtrs = libPtrs;
             this.funPtrs = funPtrs;
@@ -28,18 +28,12 @@ namespace AutoExpr
             }
         }
 
-
-        internal static NativeLibEnv LoadIpp()
+        internal static DynamicLibraries LoadIpp()
         {
             var imports = new Dictionary<string, string[]> {
                 { "core", Array.Empty<string>()},
-                {
-                    "vm", Array.Empty<string>()
-                },
-                {
-                    "s", new[] { "ippsAdd_64f_I", "ippsMul_64f_I", "ippsExp_64f_I",
-                    "ippsZero_64f", "ippsCopy_64f", "ippsSet_64f", "ippsMalloc_64f", "ippsFree"}
-                }
+                { "vm", Array.Empty<string>()},
+                { "s", FunctionNames.All }
             };
 
             var libPtrs = new IntPtr[imports.Keys.Count];
@@ -55,7 +49,7 @@ namespace AutoExpr
                 return domAndSyms.Value.Select(sym => (sym, NativeLibrary.GetExport(libPtr, sym)));
             }).ToDictionary(sp => sp.sym, sp => sp.Item2);
 
-            return new NativeLibEnv(libPtrs, funPtrs);
+            return new DynamicLibraries(libPtrs, funPtrs);
         }
 
         private static string GetLibraryPath(string ippDomain) => Path.Combine("/opt/intel/ipp/lib", $"libipp{ippDomain}.dylib");
