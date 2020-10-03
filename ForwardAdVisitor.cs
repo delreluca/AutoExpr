@@ -4,7 +4,8 @@ using AutoExpr.Llvm;
 
 namespace AutoExpr
 {
-    public class Visitor : IExprVisitor<CodeGenerator, CodeGenerator>
+    /// <summary>Generates code for a forward algorithmic differentiation pass</summary>
+    public class ForwardAdVisitor : IExprVisitor<CodeGenerator, CodeGenerator>
     {
         public CodeGenerator VisitAdd(Add add, CodeGenerator g)
         {

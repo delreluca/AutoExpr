@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using LLVMSharp;
 
@@ -17,6 +18,7 @@ namespace AutoExpr
             Generator = generator;
         }
 
+        ///<summary>Runs the LLVM IR by compiling it and using the given function pointers</summary>
         public void Run(IReadOnlyDictionary<string, IntPtr> env)
         {
             LLVM.BuildRetVoid(Generator.Builder);
@@ -24,10 +26,6 @@ namespace AutoExpr
             if (LLVM.VerifyModule(Generator.Module, LLVMVerifierFailureAction.LLVMPrintMessageAction, out var error) != new LLVMBool(0))
             {
                 Console.WriteLine($"Error in State.Module: {error}");
-            }
-            else
-            {
-                Console.WriteLine("State.Module verified.");
             }
 
             LLVM.LinkInMCJIT();
@@ -42,11 +40,7 @@ namespace AutoExpr
             LLVM.InitializeMCJITCompilerOptions(options);
             if (LLVM.CreateMCJITCompilerForModule(out var engine, Generator.Module, options, out error) != new LLVMBool(0))
             {
-                Console.WriteLine($"Error: {error}");
-            }
-            else
-            {
-                Console.WriteLine("JIT created.");
+                Console.WriteLine($"JIT init error: {error}");
             }
             
             foreach (var fn in env)
@@ -56,10 +50,12 @@ namespace AutoExpr
 
             var jitty = (JitEntryPoint)Marshal.GetDelegateForFunctionPointer(LLVM.GetPointerToGlobal(engine, Generator.EntryPoint), typeof(JitEntryPoint));
 
-            LLVM.DumpModule(Generator.Module);
-            Console.WriteLine("Running...");
+            //LLVM.DumpModule(Generator.Module);
+            var s = Stopwatch.StartNew();
+            Console.WriteLine("Call into JITted code...");
             jitty();
-            Console.WriteLine("Returned.");
+            var t = s.ElapsedMilliseconds;
+            Console.WriteLine("Returned after {0} ms", t);
 
             LLVM.DisposeBuilder(Generator.Builder);
             LLVM.DisposeExecutionEngine(engine);

@@ -16,49 +16,70 @@ namespace AutoExpr
                 Console.WriteLine("IPP available");
 
                 Console.Write("How many paths? [e.g. 10000]: ");
-                var nPaths = 1000;//int.Parse(Console.ReadLine(), CultureInfo.InvariantCulture);
-                Console.WriteLine("Add to end result: ");
-                var s = 0.0;//double.Parse(Console.ReadLine(), CultureInfo.InvariantCulture);
-
-                var node = new Mul(new[] { (Expr)new Const(2.0), new Var("x") });
-                var node2 = new Add(new[] { (Expr)new Const(1.0), node });
-                var node3 = new Exp(node2);
-                var node4 = new Add(new[] {(Expr)new Const(s), node3});
+                var nPaths = int.Parse(Console.ReadLine(), CultureInfo.InvariantCulture);
 
                 // working memory
-                var nVariables = 1;
-                var vM = Marshal.AllocHGlobal(sizeof(double)*nPaths*(2+nVariables));
-                var gM = vM + sizeof(double)*nPaths;
-                var xM = gM + sizeof(double)*nPaths;
-                var variables = new Dictionary<string, (IntPtr, double)>{
-                    { "x", (xM, 1.0)}
-                };
+                var nVariables = 102; //100 normal draws and mu and sigma
+                var valueMem = Marshal.AllocHGlobal(sizeof(double) * nPaths * (2 + nVariables));
+                var gradientMem = valueMem + sizeof(double) * nPaths;
+                var variablesMem = gradientMem + sizeof(double) * nPaths;
+                var variables = Enumerable.Range(0, nVariables)
+                    .Select(i => (i == 0 ? "mu" : i == 1 ? "sigma" : $"x{i - 2}",
+                    (ptr: variablesMem + sizeof(double) * nPaths * i, seed: i == 0 ? 1.0 : 0.0))).ToDictionary(t => t.Item1, t => t.Item2);
 
-                var xValues = new double[nPaths];
+                var xValues = new double[nPaths * nVariables];
                 var rng = new Random();
+
                 for (int i = 0; i < nPaths; i++)
                 {
-                    xValues[i] = rng.NextDouble();
+                    xValues[i] = 0.1; // mu
+                    xValues[nPaths + i] = 0.5; // sigma
+                    xValues[2*nPaths + i] = 0.0; // x0
                 }
 
-                Marshal.Copy(xValues, 0, xM, nPaths);
+                for (int i = nPaths * 3; i < nVariables * nPaths; i += 2)
+                {
+                    var normal = Statistics.BoxMuller(rng.NextDouble(), rng.NextDouble());
+                    xValues[i] = normal.x;
 
-                var state = node4.Visit(new Visitor(), new CodeGenerator(vM, variables, gM, (ulong)nPaths, LlvmBindings.BuildFunctions));
+                    if (i + 1 < nPaths * nVariables)
+                    {
+                        xValues[i + 1] = normal.y;
+                    }
+                }
+
+                Marshal.Copy(xValues, 0, variablesMem, nPaths * nVariables);
+
+                Expr node = new Var("x0");
+                Expr mu = new Var("mu");
+                Expr s = new Var("sigma");
+                double timeGrid = 0.01;
+                Expr dt = new Const(timeGrid);
+                Expr brownianScale = new Const(Math.Sqrt(timeGrid));
+
+                for (int i = 0; i < nVariables - 2; i++)
+                {
+                    var brownianIncrement = new Mul(new[] { new Var($"x{i}"), brownianScale });
+                    node = new Add(new[] { new Mul(new[] { mu, dt }), new Mul(new[] { s, brownianIncrement }), node });
+                }
+
+                var final = new Exp(node);
+
+                var state = final.Visit(new Visitor(), new CodeGenerator(valueMem, variables, gradientMem, (ulong)nPaths, LlvmBindings.BuildFunctions));
 
                 var executor = new LlvmExecutor(state);
                 executor.Run(env.FunctionPointers);
 
                 Console.WriteLine("Back in main, fetching result.");
                 var result = new double[nPaths];
-                Marshal.Copy(vM, result, 0, nPaths);
+                Marshal.Copy(valueMem, result, 0, nPaths);
                 var gradResult = new double[nPaths];
-                Marshal.Copy(gM, gradResult, 0, nPaths);
+                Marshal.Copy(gradientMem, gradResult, 0, nPaths);
 
+                Console.WriteLine("E[X(100)] = {0}, expected 1.25", result.Average());
+                Console.WriteLine("dE[X(100)]/dmu = {0}, expected 1.25", gradResult.Average());
 
-                Console.WriteLine("MGF(1) = {0}, expected 8.68", result.Average());
-                Console.WriteLine("dMGF(1) = {0}, expected 17.36", gradResult.Average());
-
-                Marshal.FreeHGlobal(vM);
+                Marshal.FreeHGlobal(valueMem);
             }
         }
     }
