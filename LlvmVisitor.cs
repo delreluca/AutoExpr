@@ -30,15 +30,38 @@ namespace AutoExpr
 
         public LLVMValueRef NPaths;
 
-        public LLVMValueRef WorkingMemory;
+        public LLVMValueRef ValueMemory;
+
+        public LLVMValueRef GradientMemory;
 
         public Dictionary<string, LLVMValueRef> VarMemory;
+
+        public Dictionary<string, double> SeedMemory;
 
         public LLVMModuleRef Module { get; }
 
         public LLVMBuilderRef Builder { get; }
 
         public LLVMValueRef EntryPoint { get; private set; }
+
+        public class MallocDisposer : IDisposable
+        {
+            private LlvmState state1;
+            private LLVMValueRef ptr1;
+
+            public MallocDisposer(LlvmState state, LLVMValueRef ptr)
+            {
+                state1 = state;
+                ptr1 = ptr;
+            }
+
+            public void Dispose()
+            {
+                state1.Call(state1.Free, new[] { ptr1 }, "");
+            }
+
+            public LLVMValueRef Pointer => ptr1;
+        }
 
         private int Counter = 0;
 
@@ -96,6 +119,37 @@ namespace AutoExpr
             LLVM.DisposeExecutionEngine(engine);
         }
 
+        public LLVMValueRef LAdd(LLVMValueRef a, LLVMValueRef b, string name = "") => LLVM.BuildAdd(Builder, a, b, name);
+        public LLVMValueRef LMul(LLVMValueRef a, LLVMValueRef b, string name = "") => LLVM.BuildMul(Builder, a, b, name);
+
+        public LLVMValueRef Const(int val) => LLVM.ConstInt(LLVM.Int64Type(), (ulong)val, new LLVMBool(0));
+
+        public LLVMValueRef Const(double val) => LLVM.ConstReal(LLVM.DoubleType(), val);
+
+        public LLVMValueRef OffsetF64(int n) => LMul(SizeF64(), Const(n));
+        public LLVMValueRef OffsetF64(LLVMValueRef n) => LMul(SizeF64(), n);
+
+        public LLVMValueRef SizeF64() => LLVM.SizeOf(LLVM.DoubleType());
+
+        public LLVMValueRef IppAdd(LLVMValueRef a, LLVMValueRef b, string name = "") => Call(Add, new[] { a, b, NPaths }, name);
+        public LLVMValueRef IppMul(LLVMValueRef a, LLVMValueRef b, string name = "") => Call(Mul, new[] { a, b, NPaths }, name);
+        public LLVMValueRef IppExp(LLVMValueRef a, string name = "") => Call(Exp, new[] { a, NPaths }, name);
+
+        public LLVMValueRef IppCpy(LLVMValueRef a, LLVMValueRef b, string name = "", LLVMValueRef? length = null) => Call(Cpy, new[] { a, b, length ?? NPaths }, name);
+
+        public LLVMValueRef IppSet(double value, LLVMValueRef vector, string name = "", LLVMValueRef? length = null) =>
+            value == 0.0 ? Call(Zro,
+                                new[] { vector, length ?? NPaths },
+                                name) : Call(Set, new[] { Const(value), vector, length ?? NPaths }, name);
+
+        public MallocDisposer Allocate(LLVMValueRef bytes, string name = "")
+        {
+            var mem = Call(Malloc, new[] { bytes }, name);
+            return new MallocDisposer(this, mem);
+        }
+
+        public LLVMValueRef Call(LLVMValueRef fn, LLVMValueRef[] args, string name = "") => LLVM.BuildCall(Builder, fn, args, name);
+
         private LLVMValueRef GetIppFn(string name, LLVMTypeRef[] argumentTypes, LLVMTypeRef? returnType = null)
         {
             var fnType = LLVM.FunctionType(returnType ?? LLVM.Int64Type(), argumentTypes, false);
@@ -111,7 +165,7 @@ namespace AutoExpr
             LLVM.PositionBuilderAtEnd(Builder, block);
         }
 
-        public LlvmState(IntPtr workingMemory, IReadOnlyDictionary<string, IntPtr> varMemory, LLVMModuleRef module, LLVMBuilderRef builder, Dictionary<string, LLVMValueRef> namedValues, Stack<LLVMValueRef> valueStack)
+        public LlvmState(IntPtr valueMemory, IReadOnlyDictionary<string, (IntPtr, double)> varMemory, LLVMModuleRef module, LLVMBuilderRef builder, IntPtr gradientMemory, ulong nPaths)
         {
             this.Module = module;
             this.Builder = builder;
@@ -130,13 +184,14 @@ namespace AutoExpr
             Add = GetIppFn("ippsAdd_64f_I", new[] { LLVM.Int64Type(), LLVM.Int64Type(), LLVM.Int64Type() });
             // IppStatus ippsMul_64f_I(const Ipp64f* pSrc, Ipp64f* pSrcDst, int len);
             Mul = GetIppFn("ippsMul_64f_I", new[] { LLVM.Int64Type(), LLVM.Int64Type(), LLVM.Int64Type() });
-            NPaths = LLVM.ConstInt(LLVM.Int64Type(), 10000, new LLVMBool(0));
-            WorkingMemory = LLVM.ConstInt(LLVM.Int64Type(), (ulong)workingMemory.ToInt64(), new LLVMBool(0));
-            VarMemory = varMemory.Select(kvp => (kvp.Key, LLVM.ConstInt(LLVM.Int64Type(), (ulong)kvp.Value.ToInt64(), new LLVMBool(0)))).ToDictionary(t => t.Key, t => t.Item2);
-
+            NPaths = LLVM.ConstInt(LLVM.Int64Type(), nPaths, new LLVMBool(0));
+            ValueMemory = LLVM.ConstInt(LLVM.Int64Type(), (ulong)valueMemory.ToInt64(), new LLVMBool(0));
+            GradientMemory = LLVM.ConstInt(LLVM.Int64Type(), (ulong)gradientMemory.ToInt64(), new LLVMBool(0));
+            VarMemory = varMemory.Select(kvp => (kvp.Key, LLVM.ConstInt(LLVM.Int64Type(), (ulong)kvp.Value.Item1.ToInt64(), new LLVMBool(0)))).ToDictionary(t => t.Key, t => t.Item2);
+            SeedMemory = varMemory.Select(kvp => (kvp.Key, kvp.Value.Item2)).ToDictionary(kvp => kvp.Key, kvp => kvp.Item2);
         }
 
-        public LlvmState(IntPtr workingMemory, IReadOnlyDictionary<string, IntPtr> varMemory) : this(workingMemory, varMemory, LLVM.ModuleCreateWithName("CodeGen"), LLVM.CreateBuilder(), new Dictionary<string, LLVMValueRef>(), new Stack<LLVMValueRef>())
+        public LlvmState(IntPtr valueMemory, IntPtr gradientMemory, IReadOnlyDictionary<string, (IntPtr, double)> varMemory, ulong nPaths) : this(valueMemory, varMemory, LLVM.ModuleCreateWithName("CodeGen"), LLVM.CreateBuilder(), gradientMemory, nPaths)
         {
 
         }
@@ -148,58 +203,97 @@ namespace AutoExpr
     {
         public LlvmState VisitAdd(Add add, LlvmState state)
         {
-            var tmp = LLVM.BuildCall(state.Builder, state.Malloc, new LLVMValueRef[] { state.NPaths }, $"tmpsum{state.GetId()}");
+            // Allocate both gradient and value temp in one go
+            var allocLength = state.LMul(state.NPaths, state.Const(2));
 
-            LLVM.BuildCall(state.Builder, state.Zro, new LLVMValueRef[] { tmp, state.NPaths }, "");
-
-            foreach (var summand in add.Children)
+            using (var tmpHandle = state.Allocate(allocLength))
             {
-                summand.Visit(this, state);
-                LLVM.BuildCall(state.Builder, state.Add, new LLVMValueRef[] { state.WorkingMemory, tmp, state.NPaths }, "");
+                var tmpValue = tmpHandle.Pointer;
+                var tmpGrad = state.LAdd(tmpValue, state.OffsetF64(state.NPaths));
+
+                state.IppSet(0.0, tmpValue, "", allocLength);
+
+                foreach (var summand in add.Children)
+                {
+                    summand.Visit(this, state);
+                    state.IppAdd(state.ValueMemory, tmpValue);
+                    state.IppAdd(state.GradientMemory, tmpGrad);
+                }
+
+                state.IppCpy(tmpValue, state.ValueMemory);
+                state.IppCpy(tmpGrad, state.GradientMemory);
+
+                return state;
             }
-
-            LLVM.BuildCall(state.Builder, state.Cpy, new LLVMValueRef[] { tmp, state.WorkingMemory, state.NPaths }, "");
-
-            LLVM.BuildCall(state.Builder, state.Free, new[] { tmp }, "");
-
-            return state;
         }
 
         public LlvmState VisitMul(Mul mul, LlvmState state)
         {
-            var tmpProd = LLVM.BuildCall(state.Builder, state.Malloc, new LLVMValueRef[] { state.NPaths }, $"tmpprd{state.GetId()}");
+            // Allocate gradient and value temps in one go
+            var allocLength = state.LMul(state.NPaths, state.Const(1 + mul.Children.Count));
 
-            LLVM.BuildCall(state.Builder, state.Set, new LLVMValueRef[] { LLVM.ConstReal(LLVM.DoubleType(), 1), tmpProd, state.NPaths }, "");
-
-            foreach (var factor in mul.Children)
+            using (var tmpHandle = state.Allocate(allocLength))
             {
-                factor.Visit(this, state);
-                LLVM.BuildCall(state.Builder, state.Mul, new LLVMValueRef[] { state.WorkingMemory, tmpProd, state.NPaths }, "");
+                var tmpValue = tmpHandle.Pointer;
+
+                var tmpGrads = new LLVMValueRef[mul.Children.Count];
+                for (var i = 0; i < mul.Children.Count; ++i)
+                {
+                    tmpGrads[i] = state.LAdd(tmpValue, state.OffsetF64(state.LMul(state.Const(i + 1), state.NPaths)));
+                }
+
+                state.IppSet(1.0, tmpValue, "", allocLength);
+
+                var j = 0;
+                foreach (var factor in mul.Children)
+                {
+                    factor.Visit(this, state);
+                    state.IppMul(state.ValueMemory, tmpValue);
+                    state.IppMul(state.GradientMemory, tmpGrads[j]);
+
+                    for (int i = 0; i < tmpGrads.Length; ++i)
+                    {
+                        if (i != j)
+                        {
+                            state.IppMul(state.ValueMemory, tmpGrads[i]);
+                        }
+                    }
+
+                    j++;
+                }
+
+                state.IppCpy(tmpGrads[0], state.GradientMemory);
+
+                for (int i = 1; i < tmpGrads.Length; ++i)
+                {
+                    state.IppAdd(tmpGrads[i], state.GradientMemory);
+                }
+
+                state.IppCpy(tmpValue, state.ValueMemory);
+
+                return state;
             }
-
-            LLVM.BuildCall(state.Builder, state.Cpy, new LLVMValueRef[] { tmpProd, state.WorkingMemory, state.NPaths }, "");
-
-            LLVM.BuildCall(state.Builder, state.Free, new[] { tmpProd }, "");
-
-            return state;
         }
 
         public LlvmState VisitExp(Exp exp, LlvmState state)
         {
             exp.Exponent.Visit(this, state);
-            LLVM.BuildCall(state.Builder, state.Exp, new LLVMValueRef[] { state.WorkingMemory, state.NPaths }, "");
+            state.IppExp(state.ValueMemory);
+            state.IppMul(state.ValueMemory, state.GradientMemory);
             return state;
         }
 
         public LlvmState VisitConst(Const @const, LlvmState state)
         {
-            LLVM.BuildCall(state.Builder, state.Set, new LLVMValueRef[] { LLVM.ConstReal(LLVM.DoubleType(), @const.Value), state.WorkingMemory, state.NPaths }, "");
+            state.IppSet(@const.Value, state.ValueMemory);
+            state.IppSet(0.0, state.GradientMemory);
             return state;
         }
 
-        public LlvmState VisitVar(Var constVector, LlvmState state)
+        public LlvmState VisitVar(Var var, LlvmState state)
         {
-            LLVM.BuildCall(state.Builder, state.Cpy, new [] { state.VarMemory[constVector.Name], state.WorkingMemory, state.NPaths}, "");
+            state.IppCpy(state.VarMemory[var.Name], state.ValueMemory);
+            state.IppSet(state.SeedMemory[var.Name], state.GradientMemory);
             return state;
         }
     }
