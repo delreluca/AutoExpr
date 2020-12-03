@@ -41,7 +41,7 @@ namespace AutoExpr
             KnownFunctions = functionIntroducer(Module).ToDictionary(p => p.Item1, p => p.Item2);
 
 
-            NPaths = LLVM.ConstInt(LLVM.Int64Type(), nPaths, new LLVMBool(0));
+            NPaths = LLVM.ConstInt(LLVM.Int32Type(), nPaths, new LLVMBool(0));
             ValueMemory = LLVM.ConstInt(LLVM.Int64Type(), (ulong)valueMemory.ToInt64(), new LLVMBool(0));
             GradientMemory = LLVM.ConstInt(LLVM.Int64Type(), (ulong)gradientMemory.ToInt64(), new LLVMBool(0));
             VarMemory = varMemory.Select(kvp => (kvp.Key, LLVM.ConstInt(LLVM.Int64Type(), (ulong)kvp.Value.Item1.ToInt64(), new LLVMBool(0)))).ToDictionary(t => t.Key, t => t.Item2);
